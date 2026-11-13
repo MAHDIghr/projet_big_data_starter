@@ -1,0 +1,1040 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[french]{babel}
+\usepackage[margin=2.3cm]{geometry}
+\usepackage{array,booktabs,tabularx}
+\usepackage[table]{xcolor}
+\usepackage{fancyvrb}
+\usepackage[hidelinks,linktoc=all]{hyperref}
+
+\definecolor{encre}{HTML}{173451}
+\definecolor{psbar}{HTML}{242933}
+\definecolor{psbody}{HTML}{012456}
+\definecolor{pstext}{HTML}{F1F5FB}
+
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{5pt}
+\renewcommand{\arraystretch}{1.2}
+\setcounter{tocdepth}{3}
+\setcounter{secnumdepth}{3}
+
+\newcommand{\etudiant}{Kamel Mahdi Gherbi}
+\newcommand{\code}[1]{\texttt{#1}}
+\newcommand{\flux}{\ensuremath{\rightarrow}}
+\newcommand{\preuve}[2]{%
+  \href{run:../preuves/#1}{\textcolor{encre}{\underline{#2}}}}
+\newcommand{\manifeste}[2]{%
+  \href{run:../data/manifestes/#1}{\textcolor{encre}{\underline{#2}}}}
+
+\newsavebox{\psoutput}
+\newcommand{\afficherpowershell}{%
+  \par\smallskip
+  \begingroup
+  \setlength{\fboxsep}{10pt}%
+  \noindent\colorbox{psbar}{%
+    \makebox[\dimexpr\linewidth-20pt\relax][l]{%
+      \color{pstext}\small\sffamily\bfseries PowerShell
+      \hfill\mdseries $-$\quad$\times$}}%
+  \par\nointerlineskip
+  \noindent\colorbox{psbody}{\usebox{\psoutput}}\par
+  \endgroup
+}
+
+\begin{document}
+
+\begin{titlepage}
+  {\small\bfseries UNIVERSITÉ PARIS-SACLAY \quad M1 MIAGE \quad UE DSID\par}
+  \vspace{2.2cm}
+  {\Huge\bfseries\color{encre} Projet Big Data\par}
+  \medskip
+  {\Large Chaînes d'ingestion et contrôles Bronze--Silver\par}
+  \bigskip
+  \etudiant \hfill Année universitaire 2026--2027
+  \vfill
+
+  \textbf{Avancement du projet}
+
+  Le flux~1, consacré à l'API des prix des carburants, a produit un lot
+  brut vérifié dans MinIO. Le chargement PostgreSQL Bronze et les
+  contrôles de la vue Silver ont été validés sur les 9\,834 stations
+  de ce lot. Les cinq connexions des trois flux sont actives et la
+  vue d'ensemble Airbyte indique un état sain. Le contrôle Bronze
+  du flux CSV a confirmé 101 codes département distincts.
+  Le contrôle Silver du flux CSV a confirmé le même volume et la
+  présence des champs de traçabilité sur les 101 lignes.
+  Le contrôle Bronze confirme l'arrivée des quatre nouvelles fiches CRM.
+  Le rattachement de l'opportunité au compte est vérifié dans Bronze.
+  Les contrôles de volume, de clés et de traçabilité des trois vues Silver du CRM sont validés.
+\end{titlepage}
+
+\tableofcontents
+\clearpage
+
+\section{Architecture}
+\label{sec:architecture}
+
+\subsection{Périmètre et environnement local}
+
+Le projet a été exécuté sur un poste Windows avec Docker
+Desktop~4.92.0, Docker Engine~29.8.0 et Docker Compose~v5.5.1.
+Docker Desktop exécute les conteneurs en \code{linux/amd64}.
+Docker Compose démarre les services du kit sur le réseau
+\path{dsid-bigdata-network}. Airbyte est déployé séparément dans un
+cluster Kubernetes local \code{kind}, créé avec \code{abctl v0.30.4}.
+Le chart Helm et l'application Airbyte sont tous deux en version~2.5.0.
+Les sorties d'inventaire figurent à la section~\ref{sec:docker-airbyte}.
+
+{\small
+\begin{tabularx}{\linewidth}{@{}>{\bfseries}p{2.9cm}p{3.3cm}X@{}}
+\toprule
+Composant & Version ou référence & Rôle et accès local \\
+\midrule
+Airbyte & 2.5.0 &
+Exécute les synchronisations. Interface Web sur le port~8000. \\
+MinIO & Image construite par le kit &
+Stockage objet compatible S3. API sur~9000, console sur~9001.
+La référence de construction et la version du binaire actif
+figurent à la section~\ref{sec:docker-airbyte}. \\
+PostgreSQL & 18.6 &
+Base \code{warehouse} sur~5432. \code{bronze} reçoit les données
+chargées et \code{silver} expose les vues SQL standardisées. \\
+MariaDB & 11.8.9 &
+Base opérationnelle \code{espocrm} sur~3306. \\
+EspoCRM et daemon & 10.0.8 &
+Saisie des fiches et exécution des tâches du CRM. Interface Web sur~8081. \\
+Adminer & 6.1.0 &
+Interface de consultation des bases et d'exécution des contrôles SQL
+sur~8082. \\
+\bottomrule
+\end{tabularx}
+}
+
+\subsection{Réseau et types de connexion}
+
+Le navigateur du poste accède aux interfaces Web via \code{localhost}.
+Les connecteurs Airbyte s'exécutent dans le cluster \code{kind}, sur un
+réseau distinct de Compose. Pour joindre les ports publiés sur la machine
+hôte, ils utilisent l'adresse \path{host.docker.internal}.
+
+{\small
+\begin{tabularx}{\linewidth}{@{}>{\bfseries}p{3.2cm}X@{}}
+\toprule
+Liaison & Protocole et configuration utilisés \\
+\midrule
+Sources publiques &
+Requête HTTPS GET sans clé pour l'API carburants.
+Lecture HTTPS du CSV Insee avec le connecteur File. \\
+MinIO &
+Connexion S3 compatible via \url{http://host.docker.internal:9000}.
+Le bucket \code{dsid-raw} est privé. Les clés d'accès sont configurées
+localement dans Airbyte. La lecture a été validée avec Source S3~4.16.4. \\
+PostgreSQL &
+Connecteur Postgres~3.0.24, hôte \code{host.docker.internal}, port~5432,
+base \code{warehouse}, schéma cible \code{bronze}. \\
+MariaDB &
+Connecteur MySQL, hôte \code{host.docker.internal}, port~3306,
+base \code{espocrm}. Pour la reprise, le kit crée le compte dédié
+\code{airbyte} avec un droit de lecture \code{SELECT}. \\
+\bottomrule
+\end{tabularx}
+}
+
+\subsection{Parcours des données et synchronisations}
+
+{\small
+\begin{tabularx}{\linewidth}{@{}>{\bfseries}p{3cm}X@{}}
+\toprule
+Flux & Parcours des données \\
+\midrule
+1. API carburants &
+API publique \flux\ Airbyte (connecteur Builder) \flux\ MinIO RAW
+\flux\ Airbyte Source S3 \flux\ PostgreSQL Bronze \\
+2. Fichier CSV &
+CSV Insee \flux\ Airbyte File Source \flux\ MinIO RAW
+\flux\ Airbyte Source S3 \flux\ PostgreSQL Bronze \\
+3. EspoCRM &
+EspoCRM \flux\ MariaDB \flux\ Airbyte MySQL Source
+\flux\ PostgreSQL Bronze \\
+\midrule
+Couche Silver &
+PostgreSQL Bronze \flux\ scripts SQL par source
+\flux\ PostgreSQL Silver \\
+\bottomrule
+\end{tabularx}
+}
+
+Les cinq connexions Airbyte utilisent un déclenchement manuel. L'API
+et le CSV ont chacun deux connexions, l'une pour déposer les données
+dans MinIO et l'autre pour les charger en Bronze. Le CRM utilise une
+connexion directe de MariaDB à PostgreSQL. Pour l'API, le mode
+\emph{Full Refresh -- Overwrite} relit le périmètre sélectionné
+et maintient un état courant. Le manifeste identifie le lot d'origine
+par sa clé objet et son empreinte SHA-256.
+
+\preuve{airbyte/connexions_vue_ensemble.png}{Vue des cinq connexions Airbyte}.
+Elle montre les sources, les destinations et le déclenchement manuel.
+
+\section{Sources}
+
+\subsection{Flux 1 --- API publique des prix des carburants}
+
+\subsubsection{Choix de la source et contrat de données}
+
+Le jeu \emph{Prix des carburants en France, flux instantané v2} est
+publié par la DGCCRF. L'API Explore v2.1 expose les données en JSON
+par requête HTTPS GET, sans clé. Le jeu est publié sous Licence
+Ouverte 2.0 avec attribution de la source.
+
+Chaque objet du tableau \code{results} représente une station dans
+l'état observé pendant la collecte. Le champ \code{id} identifie
+la station. Le lot identifie une collecte et permet de distinguer
+les observations successives d'une même station.
+
+{\small
+\begin{tabularx}{\linewidth}{@{}>{\bfseries}p{2.9cm}X@{}}
+\toprule
+Groupe & Exemples de champs et de types observés \\
+\midrule
+Identification &
+\code{id} numérique dans le JSON, code postal \code{cp}, ville et
+adresse en texte. \\
+Prix &
+\code{gazole\_prix} et prix des autres carburants numériques.
+Les champs \code{*\_maj} sont des chaînes horodatées. \\
+Disponibilité &
+Tableaux de carburants disponibles ou indisponibles et champs
+décrivant les ruptures publiées. \\
+\bottomrule
+\end{tabularx}
+}
+
+\href{https://data.economie.gouv.fr/explore/dataset/prix-des-carburants-en-france-flux-instantane-v2/api/}{Console API du ministère}
+\quad
+\href{https://www.data.gouv.fr/datasets/prix-des-carburants-en-france-flux-instantane-v2-amelioree}{Jeu de données et licence}
+
+\subsubsection{Test du GET dans PowerShell}
+
+Le filtre \verb|where=startswith(cp, '75')| a limité le test aux
+stations dont le code postal commence par 75. Le tri explicite
+\verb|order_by=id| facilitait la comparaison des pages. La taille
+de~20 a permis de contrôler deux changements de page et l'arrêt sur
+une dernière page partielle.
+
+\begin{lrbox}{\psoutput}
+\begin{minipage}{\dimexpr\linewidth-20pt\relax}
+\color{pstext}\small
+\begin{Verbatim}
+HTTP 200 | offset=0  | count=20 | total_count=47
+HTTP 200 | offset=20 | count=20 | total_count=47
+HTTP 200 | offset=40 | count=7  | total_count=47
+
+Stations recues         : 47 / 47
+Identifiants distincts  : 47
+Identifiants absents    : 0
+Doublons                : 0
+Stations hors perimetre : 0
+Validation              : True
+\end{Verbatim}
+\end{minipage}
+\end{lrbox}
+\afficherpowershell
+
+\preuve{api/api_01_carburants_test_terminal.png}{Capture du test PowerShell}.
+Elle montre les réponses HTTP, les volumes par page et les contrôles
+des identifiants et du périmètre.
+
+\subsubsection{Configuration et validation dans Airbyte Builder}
+
+Le connecteur utilise la
+\href{https://data.economie.gouv.fr/api/explore/v2.1/catalog/datasets/prix-des-carburants-en-france-flux-instantane-v2/records}{route nationale \code{/records}}.
+
+{\small
+\begin{tabularx}{\linewidth}{@{}>{\bfseries}p{3.1cm}X@{}}
+\toprule
+Réglage & Choix et justification \\
+\midrule
+Méthode et accès &
+GET sans authentification pour interroger la route publique. \\
+Flux &
+\code{prix\_carburants\_france} dans le YAML Builder versionné.
+Le flux S3 qui relit le lot s'appelle \code{prix\_carburants}. \\
+Sélecteur &
+\code{results}, tableau qui contient les stations. \\
+Clé &
+\code{id}, identifiant métier de la station. \\
+Pagination &
+\emph{Offset Increment}. \code{limit} indique la taille de page
+et \code{offset} indique le nombre d'enregistrements à sauter. \\
+\bottomrule
+\end{tabularx}
+}
+
+Le test Builder sur Paris a vérifié l'extraction de \code{results}
+et le passage entre les trois pages. Pour la collecte nationale,
+le filtre et le tri explicite du test ont été retirés. L'absence de
+\code{select} et de transformation Builder conserve les champs et
+les valeurs transmis par la source.
+
+La taille de page est passée de~20 à~100 pour réduire le nombre
+de requêtes. L'aperçu national a confirmé les décalages 100 et 200.
+La documentation de la route fixe un plafond de 10\,000 pour
+\code{offset + limit}. La complétude se vérifie en comparant le
+nombre collecté au \code{total\_count} annoncé pendant le même job.
+Les relevés du projet ne permettent pas d'établir le quota de débit
+applicable à cette route.
+
+\preuve{api/api_03_carburants_airbyte_builder.png}{Capture du test Builder}.
+Elle montre la configuration et l'aperçu du flux de test.
+\preuve{api/api_04_carburants_pagination_nationale.png}{Pagination du flux national}.
+Cette capture montre le réglage à 100 enregistrements par page et
+l'aperçu Builder.
+\quad
+\href{https://help.opendatasoft.com/apis/ods-explore-v2/}{Documentation de la pagination}
+
+\subsection{Flux 2 --- Fichier CSV}
+
+\subsubsection{Choix du fichier et contrat de données}
+
+Le jeu retenu est le fichier des départements du Code officiel
+géographique 2026 publié par l'Insee. Une ligne décrit un département,
+identifié par le code \code{DEP}. Ce code est traité comme du texte
+afin de préserver les zéros initiaux et les codes alphanumériques.
+Le CSV comporte un en-tête, un séparateur virgule et un encodage UTF-8.
+Le fichier original contient 101 enregistrements et 101 codes
+distincts. L'Insee le diffuse sous Licence Ouverte.
+Une copie du fichier est fournie sous \path{data/v_departement_2026.csv}.
+
+\href{https://www.data.gouv.fr/datasets/code-officiel-geographique-1}{Fiche du jeu de données et licence}
+
+\href{https://www.insee.fr/fr/statistiques/fichier/8740222/v_departement_2026.csv}{Fichier CSV source de l'Insee}
+
+\subsubsection{Contrôle du fichier brut}
+
+Le connecteur File lit le CSV via HTTPS. Airbyte écrit la sortie datée
+dans le bucket \code{dsid-raw}, sous \path{raw/csv/departements}.
+La synchronisation du 13 novembre 2026 a chargé 101 enregistrements
+dans MinIO. Après téléchargement de la copie archivée de l'original,
+le contrôle PowerShell a confirmé que son SHA-256 correspond à celui
+du fichier officiel. Le CSV généré par Airbyte a une empreinte
+différente. Le manifeste consigne les empreintes, la clé de l'objet
+généré et le nombre d'enregistrements chargés.
+
+\begin{itemize}
+  \item \preuve{csv/csv_01_departements_sync_minio.png}{Synchronisation CSV vers MinIO}
+        \enspace Airbyte indique 101 enregistrements chargés.
+  \item \preuve{csv/csv_02_departements_objet_minio.png}{Objet CSV dans MinIO}
+        \enspace La console affiche l'objet daté produit par Airbyte.
+  \item \preuve{csv/csv_03_departements_sha256.txt}{Contrôle SHA-256 de l'original archivé}
+        \enspace Le résultat PowerShell \code{True} confirme l'égalité des empreintes.
+  \item \manifeste{csv_departements_2026.json}{Manifeste du lot CSV}.
+\end{itemize}
+
+\subsection{Flux 3 --- EspoCRM et MariaDB}
+
+\subsubsection{Périmètre de la source}
+
+La source MySQL \code{mariadb\_espocrm} lit la base MariaDB
+\code{espocrm} et réplique les flux \code{account}, \code{contact} et
+\code{opportunity} vers PostgreSQL Bronze. Chaque ligne représente une
+fiche de son entité et la clé métier est le champ \code{id}.
+Les colonnes \path{contact.account_id} et \path{opportunity.account_id}
+portent les rattachements au compte vérifiés dans ce scénario.
+
+Une capture de configuration affiche l'utilisateur \code{espocrm}.
+Le compte utilisé par le job réussi n'est pas établi par les preuves
+du dépôt. La procédure de reprise utilise le compte MariaDB dédié
+\code{airbyte} du kit et vérifie son droit \code{SELECT} avant le test
+de connexion.
+
+\section{Bronze}
+
+\subsection{Flux 1 --- De MinIO à PostgreSQL}
+
+\subsubsection{Lot brut contrôlé dans MinIO}
+
+Le job Airbyte~\code{5} a chargé 9\,834 enregistrements. MinIO affiche
+un fichier JSONL de 25,4~MiB dans le bucket privé \code{dsid-raw}.
+
+\begin{quote}
+\small
+\path{raw/api/prix_carburants/extraction_date=2026-11-13/1794580622068_0.jsonl}
+\end{quote}
+
+Le fichier téléchargé contient 9\,834 lignes, soit le volume chargé
+affiché dans Airbyte. Le \code{total\_count} national du job n'est pas
+consigné. La concordance des volumes établit la cohérence du lot
+collecté et chargé.
+
+\begin{lrbox}{\psoutput}
+\begin{minipage}{\dimexpr\linewidth-20pt\relax}
+\color{pstext}\small
+\begin{Verbatim}[fontsize=\footnotesize]
+Lignes JSONL : 9834
+Job Airbyte lu dans _airbyte_meta.sync_id : 5
+SHA-256 :
+AD91F416382A02FCEA107849390F3AF73449B5BF95AB29027CB9D9870214C80C
+\end{Verbatim}
+\end{minipage}
+\end{lrbox}
+\afficherpowershell
+
+\preuve{api/api_05_carburants_sync_minio.png}{Synchronisation API vers MinIO}. La chronologie Airbyte montre
+une exécution réussie avec 9\,834 enregistrements chargés.
+
+\preuve{api/api_06_carburants_objet_minio.png}{Objet JSONL dans MinIO}. La console affiche la clé datée
+et la taille de 25,4~MiB dans le bucket \code{dsid-raw}.
+
+\manifeste{api_prix_carburants_1794580622068_0.json}{Manifeste du lot}.
+Il associe le job, la clé MinIO, le volume et l'empreinte du fichier.
+
+\subsubsection{Lecture S3 et configuration PostgreSQL}
+
+La source \code{minio\_raw\_prix\_carburants} lit le bucket
+\code{dsid-raw} en JSONL avec le motif suivant.
+
+\begin{quote}
+\small
+\path{raw/api/prix_carburants/extraction_date=*/*.jsonl}
+\end{quote}
+
+Les caractères génériques acceptent les dates et les noms de fichiers
+des prochains lots. Le manifeste conserve la clé exacte pour rejouer
+une collecte précise.
+
+La connexion \code{minio\_raw} \flux\ \code{bronze} utilise le schéma
+de destination \code{bronze} et le préfixe de flux \code{api\_}.
+Le mode \emph{Full Refresh -- Overwrite} recharge la table à partir
+des objets sélectionnés par le motif S3. Le déclenchement manuel a
+permis de vérifier le premier chargement.
+
+\subsubsection{Incident de chargement et correction}
+
+Les contrôles de connexion MinIO et PostgreSQL ont permis de retrouver
+l'objet et d'atteindre le schéma cible. La réplication échouait ensuite
+à la création de la table. Le journal de la destination indiquait
+\verb|column "_airbyte_raw_id" specified more than once|.
+
+Le JSONL contient les métadonnées du job API vers MinIO. Le connecteur
+PostgreSQL génère ses propres colonnes techniques au chargement.
+Pour éviter les collisions, quatre champs entrants ont été décochés
+dans le schéma du flux \code{prix\_carburants}.
+
+\begin{itemize}
+  \item Champs décochés : \path{_airbyte_raw_id},
+        \path{_airbyte_extracted_at}, \path{_airbyte_meta} et
+        \path{_airbyte_generation_id}.
+  \item Champs conservés : \path{_airbyte_data},
+        \path{_ab_source_file_url} et
+        \path{_ab_source_file_last_modified}.
+\end{itemize}
+
+La synchronisation a réussi après cette correction. Le JSONL dans
+MinIO conserve les métadonnées du job~5. PostgreSQL contient les
+métadonnées générées lors de son propre chargement et les deux champs
+de provenance du fichier.
+
+Les contrôles PostgreSQL établissent le résultat du transfert
+MinIO vers Bronze. Le numéro~5 identifie le job API vers MinIO.
+L'identifiant du job MinIO vers PostgreSQL ne figure pas dans les
+preuves disponibles.
+
+\subsubsection{Structure observée de la table Bronze}
+
+La table \code{bronze.api\_prix\_carburants} contient sept colonnes.
+
+{\small
+\begin{tabularx}{\linewidth}{@{}l X@{}}
+\toprule
+Colonne & Type PostgreSQL \\
+\midrule
+\code{\_airbyte\_raw\_id} & \code{character varying} \\
+\code{\_airbyte\_extracted\_at} & \code{timestamp with time zone} \\
+\code{\_airbyte\_meta} & \code{jsonb} \\
+\code{\_airbyte\_generation\_id} & \code{bigint} \\
+\code{\_airbyte\_data} & \code{jsonb} \\
+\code{\_ab\_source\_file\_url} & \code{character varying} \\
+\code{\_ab\_source\_file\_last\_modified} & \code{character varying} \\
+\bottomrule
+\end{tabularx}
+}
+
+L'inventaire de \verb|_airbyte_data| a identifié 47 champs métier.
+Leurs présences varient selon les stations. L'identifiant \code{id}
+est accessible dans cet objet JSON.
+
+\preuve{api/api_07_carburants_structure_bronze.png}{Structure de la table Bronze}. La requête affiche les sept
+colonnes, les types PostgreSQL et les champs de provenance.
+
+\subsection{Flux 2 --- Chargement du CSV}
+
+La connexion \emph{minio\_raw vers bronze}, identifiée par la source
+\code{minio\_raw\_departements}, figure parmi les cinq connexions
+saines. La configuration documentée cible \code{bronze.csv\_departements}.
+Le motif S3 retient les sorties CSV datées et exclut le dossier
+\code{original/}. Le contrôle SQL dans la base \code{warehouse}
+a confirmé 101 lignes dans \path{bronze.csv_departements}. Ce volume
+correspond au nombre d'enregistrements du fichier officiel et au
+nombre chargé par Airbyte vers MinIO. Le test compte 101 codes
+département distincts, sans valeur absente ou vide et sans doublon.
+Les codes \code{01}, \code{2A} et \code{2B} apparaissent chacun une fois,
+ce qui confirme la conservation du zéro initial et des codes
+alphanumériques vérifiés.
+
+\preuve{csv/csv_04_departements_controle_bronze.png}{Requête et résultat du contrôle Bronze du CSV}.
+
+\subsection{Flux 3 --- Chargement du CRM}
+
+La connexion \emph{espocrm vers bronze} apparaît saine dans Airbyte.
+L'inventaire SQL de la base \code{warehouse} confirme trois tables dans
+le schéma \code{bronze}. Les volumes observés correspondent au relevé
+initial de la source MariaDB.
+
+\begin{tabularx}{\linewidth}{@{}Xrr@{}}
+\toprule
+Table PostgreSQL & MariaDB & Bronze \\
+\midrule
+\path{bronze.espocrm_account} & 1 & 1 \\
+\path{bronze.espocrm_contact} & 2 & 2 \\
+\path{bronze.espocrm_opportunity} & 1 & 1 \\
+\bottomrule
+\end{tabularx}
+
+\preuve{crm/crm_01_tables_bronze.png}{Inventaire des tables CRM dans Bronze}
+\quad
+\preuve{crm/crm_02_volumes_bronze.png}{Comptage des lignes CRM dans Bronze}.
+
+\section{Silver}
+
+\subsection{Règles communes}
+
+Cinq vues PostgreSQL versionnées sous \path{sql/silver/} exposent
+une ligne par clé métier dans chaque entité. Elles calculent la
+standardisation à partir de l'état courant de Bronze à chaque requête.
+Après une synchronisation, les mêmes règles s'appliquent immédiatement
+aux données chargées. Les colonnes suivent le \emph{snake\_case}.
+Le système source, l'identifiant source et l'horodatage d'ingestion
+assurent la traçabilité.
+
+Dans les cinq vues, \path{ingested_at_utc} reprend directement
+\path{_airbyte_extracted_at}, de type \code{timestamptz}. PostgreSQL
+conserve l'instant et l'affiche dans le fuseau de la session. Le
+paramètre SQL \verb|SET TIME ZONE 'UTC'| permet de l'afficher en UTC.
+Les champs métier \path{created_at} et \path{modified_at} du CRM
+gardent leur type source \code{timestamp without time zone}. Leur
+conversion en instants UTC nécessite de confirmer le fuseau source.
+
+Le dédoublonnage traite les occurrences répétées d'une même clé.
+Une clé vide est écartée. Pour une clé présente plusieurs fois,
+la vue retient l'extraction la plus récente et utilise l'identifiant
+technique Airbyte pour départager les égalités.
+
+\subsection{Flux 1 --- Vue des stations et prix des carburants}
+
+\subsubsection{Grain et clé}
+
+La vue \code{silver.api\_station}, définie dans
+\path{sql/silver/api_station.sql}, reprend le modèle fourni.
+Le grain est une ligne par station dans l'état courant chargé
+en Bronze. \code{record\_id} et \code{source\_record\_id} reprennent
+l'identifiant \code{id} de l'API en texte.
+
+\subsubsection{Dictionnaire des colonnes et conversions}
+
+{\small
+\begin{tabularx}{\linewidth}{@{}>{\bfseries}p{3cm}X@{}}
+\toprule
+Groupe & Colonnes et règles appliquées \\
+\midrule
+Clés &
+\code{record\_id} et \code{source\_record\_id} en \code{text},
+issus de \code{id}. \\
+Adresse &
+\code{code\_postal}, \code{ville}, \code{adresse},
+\code{code\_departement} et \code{code\_region} en \code{text}.
+Le code postal provient de \code{cp}. \\
+Prix &
+\code{gazole\_prix}, \code{e10\_prix}, \code{e85\_prix},
+\code{gplc\_prix}, \code{sp95\_prix} et \code{sp98\_prix}
+en \code{numeric(12,3)}. \\
+Horodatages métier &
+Les six champs source \code{*\_maj} deviennent
+\code{*\_mis\_a\_jour\_at} en \code{timestamptz}. \\
+Disponibilité &
+\code{carburants\_disponibles} et \code{carburants\_indisponibles}
+en \code{jsonb}. \\
+Traçabilité &
+\code{source\_system} en \code{text},
+\code{ingested\_at\_utc} en \code{timestamptz}
+et \code{source\_file\_key} en \code{character varying}. \\
+\bottomrule
+\end{tabularx}
+}
+
+Les espaces en bordure des champs textuels sont retirés. Une chaîne
+vide après nettoyage représente une valeur manquante et devient
+\code{NULL}. Le type texte conserve les zéros initiaux, comme dans
+le code postal \code{01000}. Le type \code{numeric(12,3)} conserve
+la précision observée sur les prix, par exemple \code{2.301}.
+Le décimal exact convient aux prix exprimés au millième. Le type
+\code{double precision} utilise une représentation binaire approchée
+qui peut introduire des écarts lors des comparaisons ou des calculs.
+Un prix absent reste \code{NULL}.
+
+L'horodatage \code{ingested\_at\_utc} reprend
+\verb|_airbyte_extracted_at| en Bronze. Les horodatages métier
+proviennent des champs de mise à jour de l'API. La valeur de
+\code{source\_system} est \code{api\_prix\_carburants} et
+\code{source\_file\_key} reprend la référence de l'objet MinIO.
+
+La vue expose les champs nécessaires à l'identification des stations,
+à leur localisation administrative et à l'analyse des prix et de
+la disponibilité. Les autres champs de l'API, dont les horaires,
+les services et le détail des ruptures, restent consultables en Bronze.
+
+\subsubsection{Dédoublonnage et réconciliation}
+
+La vue écarte les identifiants absents ou vides. Pour chaque
+identifiant renseigné, \code{ROW\_NUMBER()} classe les lignes
+par horodatage d'ingestion décroissant. L'identifiant technique
+\verb|_airbyte_raw_id| départage les égalités. La vue conserve
+la ligne de rang~1. Sur le lot contrôlé, aucune ligne n'a été écartée.
+
+\subsection{Flux 2 --- Données du CSV}
+
+La vue \path{silver.csv_departement} présente une ligne par code
+département. Elle standardise les noms des sept champs métier en
+\code{snake\_case}, supprime les espaces en bordure des valeurs
+et convertit les chaînes vides en valeurs nulles. Les codes sont
+conservés en texte pour préserver les zéros initiaux et les codes
+alphanumériques.
+
+Le code département fournit \path{record_id} et \path{source_record_id}.
+La vue conserve également le système source, l'horodatage d'extraction
+Airbyte et la référence du fichier MinIO. Les lignes sans code sont
+écartées. Pour un même code, la vue conserve la ligne dont l'horodatage
+d'extraction est le plus récent. En cas d'égalité, l'identifiant
+technique Airbyte départage les lignes par ordre décroissant.
+Le contrôle Bronze a relevé 101 codes uniques et aucune valeur absente.
+
+Le script de création est \path{sql/silver/csv_departement.sql}.
+
+\subsection{Flux 3 --- Entités CRM}
+
+Les vues \path{silver.espocrm_account}, \path{silver.espocrm_contact}
+et \path{silver.espocrm_opportunity} présentent une ligne par identifiant
+source et par entité. Les champs textuels sélectionnés sont normalisés
+par suppression des espaces en bordure et conversion des chaînes vides
+en valeurs nulles. Les vues conservent le statut de suppression logique,
+les clés de liaison disponibles et les champs de traçabilité du template.
+Le montant conserve son type numérique et sa devise, et la date de
+clôture conserve son type \code{date}. Les vues conservent les
+clés de liaison en texte. Les contacts et les opportunités
+référencent le compte par \path{account_id}, rapproché de
+\path{record_id} dans la vue des comptes. Ce choix préserve le grain
+de chaque entité et permet de vérifier séparément la présence
+de la fiche et celle du compte attendu.
+
+Les lignes sans identifiant sont écartées. Pour chaque identifiant, la
+vue retient l'extraction Airbyte la plus récente et départage les
+égalités par ordre décroissant de l'identifiant technique Airbyte.
+Les trois scripts de création se trouvent dans \path{sql/silver/}.
+
+\section{Tests}
+
+\subsection{Flux 1 --- Contrôles du chargement Bronze}
+
+{\small
+\begin{tabularx}{\linewidth}{@{}Xrr@{}}
+\toprule
+Contrôle & Attendu & Observé \\
+\midrule
+Nombre de lignes dans Bronze & 9\,834 & 9\,834 \\
+Identifiants de station distincts & 9\,834 & 9\,834 \\
+Identifiants absents ou vides & 0 & 0 \\
+Occurrences en doublon & 0 & 0 \\
+Nombre de références de fichier distinctes & 1 & 1 \\
+\bottomrule
+\end{tabularx}
+}
+
+Les 9\,834 lignes référencent la clé MinIO
+\path{raw/api/prix_carburants/extraction_date=2026-11-13/1794580622068_0.jsonl}.
+Le comptage concorde avec celui du fichier téléchargé.
+
+\preuve{api/api_08_carburants_controle_bronze.png}{Volume et clés de Bronze}. Les 9\,834 identifiants sont tous
+présents et distincts.
+
+\preuve{api/api_09_carburants_provenance_bronze.png}{Provenance du lot Bronze}. Les 9\,834 lignes référencent
+un seul objet JSONL.
+
+\begin{Verbatim}[fontsize=\small]
+WITH stations AS (
+    SELECT NULLIF(TRIM(_airbyte_data ->> 'id'), '') AS id_station
+    FROM bronze.api_prix_carburants
+)
+SELECT COUNT(*) AS lignes_chargees,
+       COUNT(DISTINCT id_station) AS ids_distincts,
+       COUNT(*) FILTER (WHERE id_station IS NULL) AS ids_absents,
+       COUNT(id_station) - COUNT(DISTINCT id_station)
+           AS occurrences_en_doublon
+FROM stations;
+
+SELECT column_name, data_type
+FROM information_schema.columns
+WHERE table_schema = 'bronze'
+  AND table_name = 'api_prix_carburants'
+ORDER BY ordinal_position;
+
+SELECT _ab_source_file_url AS fichier_source,
+       COUNT(*) AS nombre_lignes
+FROM bronze.api_prix_carburants
+GROUP BY _ab_source_file_url;
+\end{Verbatim}
+
+\subsection{Flux 1 --- Contrôle préalable des conversions}
+
+Le test a vérifié la conversion en \code{numeric(12,3)} de tous
+les prix renseignés et la validité des horodatages renseignés.
+Les valeurs absentes restent manquantes.
+
+{\small
+\begin{tabularx}{\linewidth}{@{}Xrrr@{}}
+\toprule
+Carburant & Prix renseignés & Prix invalides ou arrondis &
+Horodatages invalides \\
+\midrule
+E10    & 7\,336 & 0 & 0 \\
+E85    & 3\,762 & 0 & 0 \\
+Gazole & 9\,319 & 0 & 0 \\
+GPLc   & 1\,504 & 0 & 0 \\
+SP95   & 2\,740 & 0 & 0 \\
+SP98   & 7\,135 & 0 & 0 \\
+\bottomrule
+\end{tabularx}
+}
+
+\preuve{api/api_10_carburants_conversions.png}{Contrôle préalable des conversions}. Pour les six carburants,
+la requête relève zéro prix invalide ou arrondi et zéro horodatage invalide.
+
+\subsection{Flux 1 --- Résultats des huit contrôles Silver}
+
+{\small
+\begin{tabularx}{\linewidth}{@{}>{\bfseries}p{3cm}X@{}}
+\toprule
+Contrôle & Résultat observé et interprétation \\
+\midrule
+Clé non nulle & 0 clé absente en Silver. \\
+Unicité & 9\,834 clés distinctes pour 9\,834 lignes. \\
+Doublons & 0 occurrence en doublon en Bronze et en Silver sur ce lot. \\
+Nommage & Les 24 noms sont conformes au \emph{snake\_case}. \\
+Types & Les 24 types correspondent au dictionnaire Silver.
+Les six prix ont une précision de~12 et une échelle de~3. \\
+Réconciliation & 9\,834 lignes Bronze et 9\,834 lignes Silver.
+Le test de réconciliation retourne vrai. \\
+Traçabilité & 0 ligne sans traçabilité complète selon le contrôle
+du système, de l'identifiant, de l'horodatage et du fichier source. \\
+Règle métier & 0 station avec un prix renseigné négatif. \\
+\bottomrule
+\end{tabularx}
+}
+
+Les requêtes de bilan et d'inspection des colonnes figurent
+dans \path{sql/tests/api_station.sql}. Les résultats portent sur
+le lot contrôlé.
+
+\preuve{api/api_11_carburants_controle_silver.png}{Bilan des contrôles Silver}. Le résultat confirme la
+réconciliation des 9\,834 lignes, l'unicité des clés, la traçabilité
+et l'absence de prix négatif.
+
+\preuve{api/api_12_carburants_structure_silver.png}{Nommage et types des colonnes Silver}. L'inventaire confirme
+24 noms conformes et le type \code{numeric(12,3)} des six prix.
+
+\subsection{Flux 2 --- Contrôles de la vue Silver}
+
+Le contrôle exécuté dans PostgreSQL retourne 101 lignes pour
+101 identifiants distincts, comme en Bronze. Il relève zéro
+identifiant absent, zéro occurrence en doublon et zéro ligne
+sans les informations de traçabilité attendues. Les codes
+\code{01}, \code{2A} et \code{2B} apparaissent chacun une fois.
+
+Le contrôle est reproductible avec \path{sql/tests/csv_departement.sql}.
+\preuve{csv/csv_05_departements_controle_silver.png}{Requête et résultat du contrôle Silver du CSV}.
+
+\subsection{Flux 3 --- Contrôles des vues Silver}
+
+La requête \path{sql/tests/espocrm.sql} confirme les volumes du lot
+Bronze après le test du delta. Le nombre d'identifiants distincts
+correspond au nombre de lignes pour chaque entité.
+
+\begin{tabularx}{\linewidth}{@{}Xrrr@{}}
+\toprule
+Entité & Bronze & Silver & Identifiants distincts \\
+\midrule
+Comptes & 2 & 2 & 2 \\
+Contacts & 4 & 4 & 4 \\
+Opportunités & 2 & 2 & 2 \\
+\bottomrule
+\end{tabularx}
+
+Pour chacune des trois vues, le contrôle relève zéro identifiant absent,
+zéro doublon et zéro ligne présentant une anomalie sur le système source,
+l'identifiant source ou l'horodatage d'ingestion.
+
+\preuve{crm/crm_06_controles_silver.png}{Résultats des contrôles Silver du CRM}.
+
+Le contrôle des rattachements, inclus dans le même script, retrouve
+les deux contacts et l'opportunité créés pour le test du delta.
+Pour les trois fiches, le compte référencé et le compte retrouvé
+dans la vue Silver correspondent au compte de test
+\code{6af78794aba6cf05e}.
+
+\preuve{crm/crm_07_rattachements_silver.png}{Contrôle des trois rattachements au compte dans Silver}.
+
+L'inventaire des trois vues confirme que les 37 noms de colonnes
+respectent le format \code{snake\_case}. Les identifiants et clés de
+liaison sont de type \code{text}. L'horodatage d'ingestion est de type
+\code{timestamp with time zone}. Les champs de création et de
+modification conservent leur type source \code{timestamp without time zone}.
+Le montant de l'opportunité est de type \code{numeric}, la devise de
+type \code{text}, la probabilité de type \code{bigint} et la date de
+clôture de type \code{date}. Les indicateurs de suppression et
+d'opposition aux appels sont de type \code{boolean}.
+
+\preuve{crm/crm_08_types_nommage_silver.png}{Inventaire des noms et types des colonnes CRM dans Silver}.
+
+\section{Delta CRM}
+
+\subsection{État initial et nouvelles saisies}
+
+Les relevés initiaux dans MariaDB et PostgreSQL Bronze montrent un
+compte, deux contacts et une opportunité. Le test consiste à créer
+un nouveau compte, deux contacts et une opportunité dans EspoCRM,
+puis à rechercher leurs identifiants dans Bronze après synchronisation.
+
+\subsection{Vérification de l'arrivée en Bronze}
+
+\begin{tabularx}{\linewidth}{@{}Xrrr@{}}
+\toprule
+Entité & Avant & Après & Écart \\
+\midrule
+Comptes & 1 & 2 & +1 \\
+Contacts & 2 & 4 & +2 \\
+Opportunités & 1 & 2 & +1 \\
+\bottomrule
+\end{tabularx}
+
+La requête de contrôle recherche les quatre identifiants EspoCRM
+dans les tables correspondantes. Elle relève exactement une
+occurrence par identifiant et confirme les écarts attendus.
+
+\preuve{crm/crm_03_sync_delta_airbyte.png}{État des trois flux CRM dans Airbyte}.
+L'écran indique deux comptes, quatre contacts et deux opportunités
+chargés lors de la dernière synchronisation affichée.
+
+\preuve{crm/crm_04_delta_identifiants_bronze.png}{Requête et résultat du contrôle des quatre identifiants CRM}.
+
+Le contrôle de la relation entre l'opportunité et le compte joint
+\path{bronze.espocrm_opportunity} à \path{bronze.espocrm_account}
+sur \path{opportunity.account_id} et \path{account.id}. La requête
+retourne une ligne et confirme que l'opportunité
+\code{6af787ec38e9debdd} référence le compte de test
+\code{6af78794aba6cf05e}.
+
+\preuve{crm/crm_05_rattachement_opportunite_bronze.png}{Contrôle du rattachement de l'opportunité au compte dans Bronze}.
+
+\section{Docker et Airbyte}
+\label{sec:docker-airbyte}
+
+\subsection{Installation locale et réseau}
+
+Sur le poste Windows, Docker Desktop~4.92.0, Docker Engine~29.8.0
+et Docker Compose~v5.5.1 ont été observés. Airbyte~2.5.0 est déployé
+avec \code{abctl}. La stack a été démarrée depuis \path{compose/}
+après création du fichier local \code{.env} à partir de
+\code{.env.example}.
+
+Airbyte est accessible sur le port~8000. MinIO expose son API sur
+9000 et sa console sur 9001. PostgreSQL utilise 5432, MariaDB 3306,
+EspoCRM 8081 et Adminer 8082. Depuis Airbyte sur Windows,
+\code{host.docker.internal} permet de joindre les services exposés
+sur la machine hôte. Le kit décrit les variantes macOS et Linux.
+
+\href{https://github.com/MAHDIghr/projet_big_data_starter/blob/main/compose/README_DOCKER.md}{Procédure Docker du dépôt}
+
+\subsection{Inventaire de l'environnement exécuté}
+
+La validation de la configuration avec \code{docker compose config --quiet}
+n'a affiché aucune erreur. Les six services Compose étaient démarrés.
+PostgreSQL, MariaDB et EspoCRM affichaient l'état \code{healthy}.
+Le contrôle \code{abctl local status} indiquait \code{deployed} pour
+Airbyte, avec le chart Helm~2.5.0 et l'application~2.5.0.
+Le contrôleur \code{ingress-nginx} utilisait le chart~4.15.1 et
+l'application~1.15.1.
+
+\subsubsection{Images Docker et version de l'outil de déploiement}
+
+La sortie de \code{docker compose images} associe chaque conteneur
+à l'image effectivement utilisée. Les colonnes sont resserrées
+pour tenir sur la page.
+
+\begin{Verbatim}[fontsize=\scriptsize]
+CONTAINER            REPOSITORY       TAG      PLATFORM     IMAGE ID      SIZE     CREATED
+dsid-adminer         adminer          6.1.0    linux/amd64  8df93d7bb431  164MB    7 weeks ago
+dsid-espocrm         espocrm/espocrm  10.0.8   linux/amd64  817f2b063de2  1.08GB   2 months ago
+dsid-espocrm-daemon  espocrm/espocrm  10.0.8   linux/amd64  817f2b063de2  1.08GB   2 months ago
+dsid-mariadb         mariadb          11.8.9   linux/amd64  c4124d1afa87  453MB    2 weeks ago
+dsid-minio           <none>           <none>   unknown      2d3964653720  0B       N/A
+dsid-postgres        postgres         18.6     linux/amd64  e3d24f6906d0  644MB    8 days ago
+\end{Verbatim}
+
+La sortie de \code{abctl version} identifie l'outil utilisé pour
+déployer Airbyte.
+
+\begin{Verbatim}[fontsize=\small]
+version: v0.30.4
+\end{Verbatim}
+
+\subsubsection{Identification de MinIO}
+
+Le kit configure la construction depuis la référence
+\path{RELEASE.2025-10-15T17-29-55Z}. L'image active \code{2d3964653720}
+est affichée sans tag. La commande \code{docker exec dsid-minio minio --version}
+identifie le binaire actif comme \code{DEVELOPMENT.GOGET}, compilé avec
+Go~1.24.13 pour \code{linux/amd64}. Le tag de construction et
+l'identification du binaire sont relevés séparément.
+
+\subsection{Qualification de l'environnement de référence}
+
+Les relevés Docker et Airbyte documentent la stack en fonctionnement
+sur le poste Windows. Source S3~4.16.4 accède au lot API dans MinIO via
+\url{http://host.docker.internal:9000}. Les contrôles SQL documentent
+les chargements Bronze et les résultats Silver des trois sources.
+
+\subsection{Incident de publication dans Builder}
+
+\subsubsection{Diagnostic}
+
+Le test Builder réussissait. L'action \emph{Publish} renvoyait
+une erreur HTTP~500. Le journal serveur consulté avec
+\code{kubectl logs} signalait l'absence de référence d'image
+pour les manifestes de version majeure~7. Le YAML déclarait
+la version~\code{7.28.2}.
+
+\subsubsection{Correction et résultat}
+
+\begin{enumerate}
+  \item Vérifier que le pod PostgreSQL interne \code{airbyte-db-0}
+        est en cours d'exécution.
+  \item Vérifier l'empreinte SHA-256 de l'image
+        \code{airbyte/source-declarative-manifest:7.28.2}
+        avec \code{docker buildx imagetools inspect}.
+  \item Ajouter la référence de la version majeure~7 dans la table
+        \verb|declarative_manifest_image_version| de \code{db-airbyte},
+        avec \code{ON CONFLICT DO NOTHING}.
+  \item Relire l'entrée et relancer la publication.
+\end{enumerate}
+
+PowerShell a affiché \code{INSERT 0 1}, puis la version~\code{7.28.2}
+associée à la version majeure~7. La publication a réussi avec
+le même manifeste YAML.
+
+\href{https://github.com/airbytehq/airbyte/issues/84928}{Ticket Airbyte et contournement documenté}
+
+\subsection{Connexions et conventions de nommage}
+
+\subsubsection{Connexion API vers MinIO}
+
+La connexion affichée dans Airbyte est
+\code{api\_prix\_carburants} \flux\ \code{minio\_raw}.
+Elle relie \emph{API Prix des carburants France} à
+\emph{MinIO RAW Prix des carburants}. Les 47 champs détectés
+ont été sélectionnés. Le préfixe de flux \code{api\_} indique
+l'origine des données.
+
+Le déclenchement manuel permet de contrôler les exécutions.
+Le mode \emph{Full Refresh -- Overwrite} relit le périmètre
+national et maintient le dernier état dans la zone d'écriture.
+Pour conserver un lot, archiver ses fichiers et son manifeste
+hors de ce préfixe avant une nouvelle synchronisation.
+
+\subsubsection{Chemin d'écriture et lecture S3}
+
+JSONL conserve un objet par ligne et les structures imbriquées.
+Le chemin de base est \path{raw/api/prix_carburants}. Le modèle
+de chemin ajoute le dossier daté \path{extraction_date=YYYY-MM-DD}.
+Le chemin de base identifie déjà le jeu, ce qui permet d'omettre
+le nom du flux dans le modèle. Le job~5 a confirmé le chemin obtenu.
+
+La lecture a été effectuée avec Source S3~4.16.4 et la destination
+PostgreSQL~3.0.24. La source S3 utilise le bucket privé
+\code{dsid-raw}, l'endpoint \url{http://host.docker.internal:9000}
+et la région \code{us-east-1}. Elle réplique les enregistrements
+JSONL. Les identifiants sont saisis dans les champs privés d'Airbyte.
+
+\subsubsection{Noms techniques et noms affichés}
+
+Les noms techniques utilisent des minuscules et des underscores.
+Le modèle \verb|<origine>_to_<destination>| indique le sens du
+transfert lorsqu'un nouveau nom technique est choisi. Le rapport
+reprend les noms effectivement affichés dans Airbyte pour relier
+les connexions aux journaux et aux preuves. Dans PostgreSQL,
+le préfixe \code{api\_} identifie l'origine de la table Bronze.
+
+\section{Reproductibilité}
+
+\subsection{Ordre de reprise du flux API}
+
+\begin{enumerate}
+  \item Démarrer la stack du kit et vérifier les accès à Airbyte,
+        MinIO et PostgreSQL.
+  \item Importer le manifeste YAML dans Builder, tester le flux
+        et publier le connecteur si nécessaire.
+  \item Créer la source API et la connexion vers MinIO. Exécuter
+        la collecte et relever le job et la clé de l'objet.
+  \item Contrôler le volume et le SHA-256 du JSONL.
+        Enregistrer les résultats dans le manifeste du lot.
+  \item Exécuter la connexion Source S3 vers PostgreSQL Bronze.
+        Conserver les trois champs entrants retenus et vérifier
+        la structure, le volume, les clés et la provenance.
+  \item Vérifier les conversions des six carburants, exécuter
+        \path{sql/silver/api_station.sql}, puis les requêtes
+        de \path{sql/tests/api_station.sql}.
+\end{enumerate}
+
+Le dépôt fournit le manifeste du connecteur sous
+\path{airbyte/api_prix_des_carburants_france_v_2.yaml}.
+Le motif S3 est réutilisable pour les collectes suivantes.
+Pour rejouer exactement un lot, utiliser sa clé et vérifier son
+SHA-256 à partir du manifeste. Le mode \emph{Overwrite} recharge
+Bronze avec les objets sélectionnés. La vue Silver reflète ensuite
+le contenu courant de Bronze.
+
+\subsection{Vérification de la reprise et livrables}
+
+Le
+\href{https://github.com/MAHDIghr/projet_big_data_starter/blob/main/README.md}{guide de reprise}
+décrit l'ordre de démarrage, la configuration des cinq connexions,
+puis l'exécution des vues et contrôles SQL. Le
+\href{https://github.com/MAHDIghr/projet_big_data_starter/blob/main/airbyte/README_AIRBYTE.md}{guide Airbyte}
+précise les paramètres observés et ceux à vérifier.
+
+Le démarrage et les trois chargements sont documentés sur le poste
+Windows de référence. La vérification du dossier publié couvre les
+chemins des guides, les scripts et les annexes. Les preuves disponibles
+ne couvrent pas un rejeu intégral à partir d'une installation neuve.
+La version exacte de la destination S3 n'est pas établie par ces relevés.
+
+Pour le CSV, le guide décrit l'archivage de l'original, le contrôle
+SHA-256 et le chargement de l'objet produit par Airbyte. Pour le CRM,
+il décrit le contrôle initial, la création des fiches et la vérification
+de leurs identifiants après synchronisation. Une nouvelle collecte
+API produit un lot distinct dont le volume peut varier.
+
+Le dossier technique accompagne le PDF. Il contient le README,
+les fichiers Compose, \code{.env.example}, les configurations
+Airbyte sans secrets, les scripts SQL, les manifestes et les preuves
+associées aux résultats.
+
+\end{document}
