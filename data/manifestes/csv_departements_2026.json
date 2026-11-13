@@ -1,0 +1,28 @@
+{
+  "source": "insee_cog_departements_2026",
+  "producteur": "Insee",
+  "millesime": 2026,
+  "date_extraction": "2026-11-13",
+  "airbyte_records_loaded": 101,
+  "fichier_original": {
+    "nom": "v_departement_2026.csv",
+    "url": "https://www.insee.fr/fr/statistiques/fichier/8740222/v_departement_2026.csv",
+    "licence": "Licence Ouverte / Open Licence",
+    "fiche_licence": "https://www.data.gouv.fr/datasets/code-officiel-geographique-1",
+    "chemin_depot": "data/v_departement_2026.csv",
+    "taille_octets": 6076,
+    "nombre_enregistrements": 101,
+    "sha256": "513900CA23EDC682EF9B912D7BFC317129EAC3A7D71FF19BC22B40EA4838E6EB"
+  },
+  "fichier_genere_par_airbyte": {
+    "bucket": "dsid-raw",
+    "object_key": "raw/csv/departements/extraction_date=2026-11-13/1794591032491_0.csv",
+    "sha256": "2E0078C7FC11FB890188D4237F321255AF1AD47B5220529E580446029A12C85F"
+  },
+  "fichier_original_archive_minio": {
+    "bucket": "dsid-raw",
+    "sha256": "513900CA23EDC682EF9B912D7BFC317129EAC3A7D71FF19BC22B40EA4838E6EB",
+    "preuve": "preuves/csv/csv_03_departements_sha256.txt"
+  },
+  "verification_original_archive_minio": "identique"
+}

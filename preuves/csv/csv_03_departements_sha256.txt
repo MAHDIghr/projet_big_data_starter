@@ -1,0 +1,5 @@
+Contrôle d'intégrité du CSV des départements de l'Insee, millésime 2026
+Sortie PowerShell fournie après téléchargement de l'original archivé dans MinIO.
+
+SHA-256 de l'original archivé : 513900CA23EDC682EF9B912D7BFC317129EAC3A7D71FF19BC22B40EA4838E6EB
+Identique au fichier Insee : True

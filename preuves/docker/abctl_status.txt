@@ -1,0 +1,14 @@
+﻿[30;46m[30;46m  INFO   [0m[0m [96m[96mUsing Kubernetes provider:[0m[0m
+[30;46m[30;46m         [0m[0m [96m[96m  Provider: kind[0m[0m
+[30;46m[30;46m         [0m[0m [96m[96m  Context: kind-airbyte-abctl[0m[0m
+[30;42m[30;42m SUCCESS [0m[0m [32m[32mFound Docker installation: version 29.8.0[0m[0m
+[30;42m[30;42m SUCCESS [0m[0m [32m[32mExisting cluster 'airbyte-abctl' found[0m[0m
+[30;46m[30;46m  INFO   [0m[0m [96m[96mFound helm chart 'airbyte-abctl'[0m[0m
+[30;46m[30;46m         [0m[0m [96m[96m  Status: deployed[0m[0m
+[30;46m[30;46m         [0m[0m [96m[96m  Chart Version: 2.5.0[0m[0m
+[30;46m[30;46m         [0m[0m [96m[96m  App Version: 2.5.0[0m[0m
+[30;46m[30;46m  INFO   [0m[0m [96m[96mFound helm chart 'ingress-nginx'[0m[0m
+[30;46m[30;46m         [0m[0m [96m[96m  Status: deployed[0m[0m
+[30;46m[30;46m         [0m[0m [96m[96m  Chart Version: 4.15.1[0m[0m
+[30;46m[30;46m         [0m[0m [96m[96m  App Version: 1.15.1[0m[0m
+[30;46m[30;46m  INFO   [0m[0m [96m[96mAirbyte should be accessible via http://localhost:8000[0m[0m

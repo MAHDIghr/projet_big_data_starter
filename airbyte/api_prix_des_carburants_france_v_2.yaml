@@ -1,0 +1,279 @@
+version: 7.28.2
+
+type: DeclarativeSource
+
+check:
+  type: CheckStream
+  stream_names:
+    - prix_carburants_france
+
+streams:
+  - type: DeclarativeStream
+    name: prix_carburants_france
+    retriever:
+      type: SimpleRetriever
+      paginator:
+        type: DefaultPaginator
+        page_size_option:
+          type: RequestOption
+          field_name: limit
+          inject_into: request_parameter
+        page_token_option:
+          type: RequestOption
+          field_name: offset
+          inject_into: request_parameter
+        pagination_strategy:
+          type: OffsetIncrement
+          page_size: 100
+      requester:
+        type: HttpRequester
+        url: >-
+          https://data.economie.gouv.fr/api/explore/v2.1/catalog/datasets/prix-des-carburants-en-france-flux-instantane-v2/records
+        http_method: GET
+      record_selector:
+        type: RecordSelector
+        extractor:
+          type: DpathExtractor
+          field_path:
+            - results
+    primary_key: id
+    schema_loader:
+      type: InlineSchemaLoader
+      schema:
+        type: object
+        $schema: http://json-schema.org/schema#
+        required:
+          - id
+        properties:
+          cp:
+            type:
+              - string
+              - "null"
+          id:
+            type: number
+          pop:
+            type:
+              - string
+              - "null"
+          geom:
+            type:
+              - object
+              - "null"
+            properties:
+              lat:
+                type:
+                  - number
+                  - "null"
+              lon:
+                type:
+                  - number
+                  - "null"
+          prix:
+            type:
+              - string
+              - "null"
+          ville:
+            type:
+              - string
+              - "null"
+          region:
+            type:
+              - string
+              - "null"
+          adresse:
+            type:
+              - string
+              - "null"
+          e10_maj:
+            type:
+              - string
+              - "null"
+          e85_maj:
+            type:
+              - string
+              - "null"
+          rupture:
+            type:
+              - string
+              - "null"
+          e10_prix:
+            type:
+              - number
+              - "null"
+          e85_prix:
+            type:
+              - number
+              - "null"
+          gplc_maj:
+            type:
+              - string
+              - "null"
+          horaires:
+            type:
+              - string
+              - "null"
+          latitude:
+            type:
+              - string
+              - "null"
+          services:
+            type:
+              - string
+              - "null"
+          sp95_maj:
+            type:
+              - string
+              - "null"
+          sp98_maj:
+            type:
+              - string
+              - "null"
+          gplc_prix:
+            type:
+              - number
+              - "null"
+          longitude:
+            type:
+              - string
+              - "null"
+          sp95_prix:
+            type:
+              - number
+              - "null"
+          sp98_prix:
+            type:
+              - number
+              - "null"
+          gazole_maj:
+            type:
+              - string
+              - "null"
+          code_region:
+            type:
+              - string
+              - "null"
+          departement:
+            type:
+              - string
+              - "null"
+          gazole_prix:
+            type:
+              - number
+              - "null"
+          horaires_jour:
+            type:
+              - string
+              - "null"
+          code_departement:
+            type:
+              - string
+              - "null"
+          e10_rupture_type:
+            type:
+              - string
+              - "null"
+          e85_rupture_type:
+            type:
+              - string
+              - "null"
+          services_service:
+            type:
+              - array
+              - "null"
+            items:
+              type:
+                - string
+                - "null"
+          e10_rupture_debut:
+            type:
+              - string
+              - "null"
+          e85_rupture_debut:
+            type:
+              - string
+              - "null"
+          gplc_rupture_type:
+            type:
+              - string
+              - "null"
+          sp95_rupture_type:
+            type:
+              - string
+              - "null"
+          sp98_rupture_type:
+            type:
+              - string
+              - "null"
+          gplc_rupture_debut:
+            type:
+              - string
+              - "null"
+          sp95_rupture_debut:
+            type:
+              - string
+              - "null"
+          sp98_rupture_debut:
+            type:
+              - string
+              - "null"
+          gazole_rupture_type:
+            type:
+              - string
+              - "null"
+          gazole_rupture_debut:
+            type:
+              - string
+              - "null"
+          carburants_disponibles:
+            type:
+              - array
+              - "null"
+            items:
+              type:
+                - string
+                - "null"
+          horaires_automate_24_24:
+            type:
+              - string
+              - "null"
+          carburants_indisponibles:
+            type:
+              - array
+              - "null"
+            items:
+              type:
+                - string
+                - "null"
+          carburants_rupture_definitive:
+            type:
+              - string
+              - "null"
+          carburants_rupture_temporaire:
+            type:
+              - string
+              - "null"
+        additionalProperties: true
+
+spec:
+  type: Spec
+  connection_specification:
+    type: object
+    $schema: http://json-schema.org/draft-07/schema#
+    required: []
+    properties: {}
+    additionalProperties: true
+
+metadata:
+  testedStreams:
+    stream_0:
+      streamHash: ad11f9fa446b445a056b0f48d54e74059e0bc977
+    prix_carburants_france:
+      isStale: false
+      hasRecords: true
+      streamHash: 6575c11a471651fcc574c16f6c4d7105af51f0f8
+      hasResponse: true
+      primaryKeysAreUnique: true
+      primaryKeysArePresent: true
+      responsesAreSuccessful: true
+  autoImportSchema:
+    prix_carburants_france: true

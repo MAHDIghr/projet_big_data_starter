@@ -1,0 +1,2 @@
+# Préserver le SHA-256 du CSV original de l'Insee, y compris sous Windows.
+/data/v_departement_2026.csv -text

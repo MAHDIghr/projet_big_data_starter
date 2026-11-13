@@ -1,0 +1,10 @@
+{
+  "source": "prix_carburants",
+  "date_extraction": "2026-11-13",
+  "airbyte_job_id": 5,
+  "bucket": "dsid-raw",
+  "object_key": "raw/api/prix_carburants/extraction_date=2026-11-13/1794580622068_0.jsonl",
+  "airbyte_records_loaded": 9834,
+  "jsonl_line_count": 9834,
+  "sha256": "AD91F416382A02FCEA107849390F3AF73449B5BF95AB29027CB9D9870214C80C"
+}
